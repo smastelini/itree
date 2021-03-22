@@ -1,11 +1,12 @@
+# distutils: language=c++sss
 import collections
 
 cimport cython
-from libc.math cimport log2, ceil
+from libc.math cimport log2, ceil, floor
 from libc.stdlib cimport malloc, realloc
 from libc.stdint cimport SIZE_MAX
-from libcc.deque cimport deque
-from libcc.stack cimport stack
+# from libcpp.deque cimport deque
+from libcpp.stack cimport stack
 
 
 cdef struct s_node:
@@ -15,7 +16,7 @@ cdef struct s_node:
 ctypedef s_node Node
 
 
-cdef class Tree
+cdef class Tree:
     # TODO
     # - handle memory deallocation
     # - check pickling/unplickling actions: for instance, compress tree before persisting it
@@ -32,7 +33,7 @@ cdef class Tree
 
     def __cinit__(self, int max_depth=-1):
         if max_depth < 0:
-            max_depth = SIZE_MAX
+            max_depth = <int>SIZE_MAX
 
         self.max_depth = max_depth
         self.capacity = 0
@@ -42,7 +43,7 @@ cdef class Tree
         self._feat_map = {}
         self._next_feat = 0
 
-    cpdef size_t plant(self) nogil except -1:
+    cpdef size_t plant(self):
         """Allocate the initial capacity of the tree and defines the root node.
 
         Returns
@@ -69,7 +70,7 @@ cdef class Tree
 
         return 0
 
-    cdef void _clean_node(self, size_t position, unsigned int depth):
+    cdef void _clean_node(self, size_t position):
         cdef Node* n = &self._data[position]
 
         n.fid = -1
@@ -139,55 +140,60 @@ cdef class Tree
                 capacity = 2 * self.capacity
 
         # Allocate memory for the nodes
-        self.__safe_realloc(&self._data, capacity)
+        Tree.__safe_realloc(&self._data[0], capacity)
         # Update the current capacity
         self.capacity = capacity
 
         return 0
 
     @staticmethod
-    cdef realloc_ptr __safe_realloc(realloc_ptr* p, size_t n_elems) nogil except *:
+    cdef Node* __safe_realloc(Node* p, size_t n_elems) nogil except *:
         """Helper method to safely realloc memory for the internal tree structure."""
-        cdef size_t n_bytes = n_elems * sizeof(p[0][0])
+        cdef size_t n_bytes = n_elems * sizeof(Node)
 
-        if n_bytes / sizeof(p[0][0]) != n_elems:
+        if n_bytes / sizeof(Node) != n_elems:
             # Overflow in the multiplication
             with gil:
-                raise MemoryError(f"Could not allocate {n_elems * sizeof(p[0][0]} bytes.")
+                raise MemoryError(f"Could not allocate {n_elems * sizeof(Node)} bytes.")
 
-        cdef realloc_ptr tmp = <realloc_ptr>realloc(p[0], n_bytes)
+        cdef Node* tmp = <Node*>realloc(p, n_bytes)
         if tmp == NULL:
             with gil:
-                raise MemoryError("Could not allocate {n_bytes} bytes.")
+                raise MemoryError(f"Could not allocate {n_bytes} bytes.")
 
-        p[0] = tmp  # Change the pointer
+        p = tmp  # Change the pointer
 
         return tmp
 
-    def void _compress(self):
+    cdef void _compress(self):
         """Make sure the tree uses the minimum amount of memory needed to store its
         current structure.
 
         Used when pickling the tree or when the tree expansion phase is done.
         """
         # Minimum level required to stored the current structure
-        cdef size_t min_levels = ceil(log2(self.n_nodes))
-        self._resize(min_levels)
+        cdef size_t min_capacity = <size_t>ceil(log2(self.n_nodes))
+        self._resize(min_capacity)
 
-    cdef (int, int) _subtree_depth_and_count(self, size_t nid):
+    cdef (int, int) _subtree_depth_and_count(self, size_t subtree_root):
         cdef stack[size_t] nodes
         cdef stack[int] depths
         cdef Node* node
         cdef size_t nid
-        cdef int depth, m_depth, n_nodes = 0
+        cdef:
+            int depth = 0
+            int m_depth = 0
+            int n_nodes = 0
 
-        # Add root to the stack
-        nodes.push(0)
+        # Add the subtree root to the stack
+        nodes.push(subtree_root)
         depths.push(0)
 
         while not nodes.empty():
-            nid = nodes.pop()
-            depth = depth.pop()
+            nid = nodes.top()
+            depth = depth.top()
+            nodes.pop()
+            depth.pop()
 
             node = &self._data[nid]
 
@@ -204,7 +210,7 @@ cdef class Tree
 
             n_nodes += 1
 
-        return m_depth
+        return m_depth, n_nodes
 
     cpdef _del_subtree(self, size_t subtree_root, bint compress=0):
         cdef int depth, n_nodes
@@ -226,4 +232,4 @@ cdef class Tree
 
     @property
     def depth(self):
-        return _depth
+        return self._depth
