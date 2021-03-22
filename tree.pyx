@@ -4,7 +4,7 @@ from libc.stdint cimport SIZE_MAX
 
 
 cdef struct s_node:
-    int fid
+    long fid
     float theta
     size_t index[2]
 
@@ -33,7 +33,7 @@ cdef class Tree
         self._next_feat = 0
 
     cdef void _clean_node(self, size_t position):
-        node* n = &self._data[position]
+        cdef node* n = &self._data[position]
         n.fid = -1
 
         # Self loops
