@@ -17,7 +17,7 @@ cdef class Tree
     # - check pickling/unplickling actions: for instance, compress tree before persisting it
     # (remove unnecessary over-allocated memory)
     cdef:
-        readonly size_t max_depth
+        readonly long max_depth
         readonly size_t n_nodes
         readonly size_t capacity
 
@@ -25,15 +25,20 @@ cdef class Tree
         dict _feat_map
         size_t _next_feat
 
-    def __cinit__(self, size_t max_depth):
+    def __cinit__(self, long max_depth=-1):
+        if max_depth < 0:
+            max_depth = SIZE_MAX
+
         self.max_depth = max_depth
         self.capacity = 0
+
         # Map longs to the feature name
         self._feat_map = {}
         self._next_feat = 0
 
-    cdef void _clean_node(self, size_t position):
+    cdef void _init_node(self, size_t position, unsigned int depth):
         cdef node* n = &self._data[position]
+
         n.fid = -1
 
         # Self loops
@@ -56,16 +61,22 @@ cdef class Tree
 
         # TODO: check indexing
         if self.max_depth <= 10:
-            init_capacity = <size_t>(2 ** (self.max_depth + 1)) - 1
+            init_capacity = <size_t>(2 ** (self.max_depth + 1) - 1)
         else:
             init_capacity = 2047
 
         self._resize(init_capacity)
 
         # Prepare root
-        self._clean_node(0)
+        self._init_node(0)
 
         return 0
+
+    cpdef long walk(self, dict x):
+        pass
+
+    cpdef long sort(self, dict x):
+        pass
 
     cpdef (size_t, size_t) split_node(self, size_t parent, fid, double theta):
         if fid not in self._feat_map:
@@ -86,8 +97,10 @@ cdef class Tree
         p_node.index[1] = r_child
 
         # Reset leaves to their default state
-        self._clean_node(l_child)
-        self._clean_node(r_child)
+        self._init_node(l_child)
+        self._init_node(r_child)
+
+        self.n_nodes += 2
 
         # Ensure we have enough memory to work with
         if self.n_nodes > 0.7 * self.capacity:
@@ -106,6 +119,7 @@ cdef class Tree
                 # Decision stump
                 capacity = 3
             else:
+                # TODO revisit that
                 # Doubles the existing size
                 capacity = 2 * self.capacity
 
@@ -139,3 +153,7 @@ cdef class Tree
     def root(self):
         if self.n_nodes > 0:
             return self._data[0]
+
+    @property
+    def depth(self):
+        pass
