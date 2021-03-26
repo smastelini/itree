@@ -2,11 +2,48 @@ import random
 import time
 
 
+from tree import Tree
 from hash_tree import HashTree
 from list_tree import BinaryListTree, LTNode
 
 
 # Artificially builds a complete binary tree with the given depth
+def build_ctree(limits, max_depth, padding, rng):
+    def recurse(tree, parent, limits, depth=0):
+        if depth == max_depth:
+            return
+
+        # Randomly pick a feature
+        # We weight each feature by the gap between each feature's limits
+        on = rng.choices(
+            population=list(limits.keys()),
+            weights=[limits[i][1] - limits[i][0] for i in limits],
+        )[0]
+
+        # Pick a split point while using padding to avoid narrow regions
+        a = limits[on][0]
+        b = limits[on][1]
+        at = rng.uniform(a + padding * (b - a), b - padding * (b - a))
+
+        l_child, r_child = tree.split_node(parent, on, at)
+
+        tmp = limits[on]
+        limits[on] = (limits[on][0], at)
+        recurse(tree, l_child, limits, depth + 1)
+        limits[on] = tmp
+
+        tmp = limits[on]
+        limits[on] = (at, limits[on][1])
+        recurse(tree, r_child, limits, depth + 1)
+        limits[on] = tmp
+
+    tree = Tree()
+    root = tree.plant()
+    recurse(tree, root, limits, 0)
+
+    return tree
+
+
 def build_hash_tree(limits, max_depth, padding, rng):
     def recurse(tree, parent, limits, depth=0):
         if depth == max_depth:
@@ -95,7 +132,7 @@ def eval_tree_walk(tree, n_samples, n_features):
 if __name__ == '__main__':
     n_features = 10
     n_samples = 100_000
-    max_depth = 20
+    max_depth = 10
     padding = 0.15
     n_repetitions = 10
 
@@ -108,15 +145,31 @@ if __name__ == '__main__':
     limits = {i: (0, 1) for i in range(n_features)}
     hash_tree = build_hash_tree(limits, max_depth, padding, rng)
 
-    print(f'Number of nodes: {list_tree.n_nodes} (list), {hash_tree.n_nodes} (hash)')
+    rng = random.Random(42)
+    limits = {i: (0, 1) for i in range(n_features)}
+    c_tree = build_ctree(limits, max_depth, padding, rng)
 
+    print(
+        f'Number of nodes: {list_tree.n_nodes} (list), {hash_tree.n_nodes} (hash), '
+        f'{c_tree.n_nodes} (CTree)'
+    )
+
+    print('List-based tree')
     run_list = []
     for i in range(n_repetitions):
         run_list.append(eval_tree_walk(list_tree, n_samples, n_features))
 
+    print('Hash-based tree')
     run_hash = []
     for i in range(n_repetitions):
         run_hash.append(eval_tree_walk(hash_tree, n_samples, n_features))
 
+    print('C-based tree')
+    run_c = []
+    for i in range(n_repetitions):
+        run_c.append(eval_tree_walk(c_tree, n_samples, n_features))
+
+    print()
     print(f'List-based tree: {sum(run_list) / n_repetitions}')
     print(f'Hash-based tree: {sum(run_hash) / n_repetitions}')
+    print(f'C-based tree: {sum(run_c) / n_repetitions}')

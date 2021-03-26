@@ -1,12 +1,9 @@
-# distutils: language=c++sss
 import collections
 
 cimport cython
 from libc.math cimport log2, ceil, floor
-from libc.stdlib cimport malloc, realloc
+from libc.stdlib cimport realloc, free
 from libc.stdint cimport SIZE_MAX
-# from libcpp.deque cimport deque
-from libcpp.stack cimport stack
 
 
 cdef struct s_node:
@@ -22,26 +19,31 @@ cdef class Tree:
     # - check pickling/unplickling actions: for instance, compress tree before persisting it
     # (remove unnecessary over-allocated memory)
     cdef:
-        readonly int max_depth
+        readonly unsigned long max_depth
         readonly size_t n_nodes
         readonly size_t capacity
 
         int _depth
         Node* _data
         dict _feat_map
+        dict _rfeat_map
         int _next_feat
 
     def __cinit__(self, int max_depth=-1):
         if max_depth < 0:
-            max_depth = <int>SIZE_MAX
+            self.max_depth = SIZE_MAX
+        else:
+            self.max_depth = <unsigned long>max_depth
 
-        self.max_depth = max_depth
         self.capacity = 0
         self._depth = 0
 
-        # Map longs to the feature name
+        # Map longs to the feature name and vice-versa
         self._feat_map = {}
+        self._rfeat_map = {}
         self._next_feat = 0
+
+        self._data = NULL
 
     cpdef size_t plant(self):
         """Allocate the initial capacity of the tree and defines the root node.
@@ -64,20 +66,11 @@ cdef class Tree:
             init_capacity = 2047
 
         self._resize(init_capacity)
-
+        self.n_nodes = 1
         # Prepare root
         self._clean_node(0)
 
         return 0
-
-    cdef void _clean_node(self, size_t position):
-        cdef Node* n = &self._data[position]
-
-        n.fid = -1
-
-        # Self loops
-        n.index[0] = position
-        n.index[1] = position
 
     # cpdef long walk(self, dict x):
     #     pass
@@ -89,13 +82,31 @@ cdef class Tree:
         # Use the self loop trick
         for _ in range(self._depth):
             nd = &self._data[nid]
-            nid = nd.index[<size_t>(x[self._feat_map[nd.fid]] > nd.theta)]
+            nid = nd.index[<size_t>(x.get(self._rfeat_map.get(nd.fid), 0) > nd.theta)]
 
         return nid
 
+    cdef void _clean_node(self, size_t position):
+        """Set leaf node to its default state.
+
+        Parameters
+        ----------
+        position
+            The position of the node in the data array.
+        """
+        cdef Node* n = &self._data[position]
+
+        n.fid = -1
+        n.theta = 0.0
+
+        # Self loops
+        n.index[0] = position
+        n.index[1] = position
+
     cpdef (size_t, size_t) split_node(self, size_t parent, fid, double theta):
         if fid not in self._feat_map:
-            self._feat_map[self._next_feat] = fid
+            self._feat_map[fid] = self._next_feat
+            self._rfeat_map[self._next_feat] = fid
             self._next_feat += 1
 
         return self._split_node(parent, self._feat_map[fid], theta)
@@ -140,7 +151,7 @@ cdef class Tree:
                 capacity = 2 * self.capacity
 
         # Allocate memory for the nodes
-        Tree.__safe_realloc(&self._data[0], capacity)
+        self._data = Tree.__safe_realloc(self._data, capacity)
         # Update the current capacity
         self.capacity = capacity
 
@@ -161,8 +172,6 @@ cdef class Tree:
             with gil:
                 raise MemoryError(f"Could not allocate {n_bytes} bytes.")
 
-        p = tmp  # Change the pointer
-
         return tmp
 
     cdef void _compress(self):
@@ -176,8 +185,7 @@ cdef class Tree:
         self._resize(min_capacity)
 
     cdef (int, int) _subtree_depth_and_count(self, size_t subtree_root):
-        cdef stack[size_t] nodes
-        cdef stack[int] depths
+        nodes_depth = collections.deque()
         cdef Node* node
         cdef size_t nid
         cdef:
@@ -186,24 +194,18 @@ cdef class Tree:
             int n_nodes = 0
 
         # Add the subtree root to the stack
-        nodes.push(subtree_root)
-        depths.push(0)
+        nodes_depth.push((subtree_root, 0))
 
-        while not nodes.empty():
-            nid = nodes.top()
-            depth = depth.top()
-            nodes.pop()
-            depth.pop()
+        while not nodes_depth.empty():
+            nid, depth = nodes_depth()
 
             node = &self._data[nid]
 
             if node.index[1] != nid:
-                nodes.push(node.index[1])
-                depths.push(depth + 1)
+                nodes_depth.append((node.index[1], depth + 1))
 
             if node.index[0] != nid:
-                nodes.push(node.index[0])
-                depths.push(depth + 1)
+                nodes_depth.append((node.index[0], depth + 1))
 
             if depth > m_depth:
                 m_depth = depth
@@ -228,8 +230,11 @@ cdef class Tree:
     @property
     def root(self):
         if self.n_nodes > 0:
-            return self._data[0]
+            return 0
 
     @property
     def depth(self):
         return self._depth
+
+    def __dealloc__(self):
+        free(self._data)
